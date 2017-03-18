@@ -1,6 +1,6 @@
 /*
 *
-*   This is the Servet for the Chat application running over sockets
+*   This is the Server for the Chat application running over sockets
 *
 */
 #include <stdio.h>
@@ -18,18 +18,6 @@ int static const MAX_USERNAME_SIZE = 50;
 int static const MAX_CHATROOM_CLIENTS = 50;
 int static const MAX_CHATROOM_QTY = 10;
 
-void printServerRoomStatus();
-struct MACClient* findClientBySocket(int socket);
-int broadcastMessageToChatRoom(struct MACClient *clientFrom, char *msg);
-//the thread heandler function to handle client connections
-void *clientConnection_handler(void *);
-
-
-int sockClients[200];
-int qtyClients = 0;
-int SOCKET_PORT = 0;
-char *SERVER_IP = "192.168.111.128";
-
 // Structure to handle Clients Information
 struct MACClient
 {
@@ -39,7 +27,6 @@ struct MACClient
   int chatRoom;
   int isProfessor;
 };
-
 // Structure to handle ChatRoom Information
 struct ChatRoom
 {
@@ -50,11 +37,27 @@ struct ChatRoom
   int clientsQty;
 };
 
+
+// List of clients Sockets
+int sockClients[200];
+// Total of connected clients up to the moment
+int qtyClients = 0;
 // List of Chatroom
 struct ChatRoom chatRoomList[10];
+// Quantity of initialized ChatRooms up to the momment
 int chatRoomQty = 0;
+// Server IP Address
 struct sockaddr_in server;
+char *SERVER_IP = "192.168.111.128";
+int SOCKET_PORT = 0;
 
+// Method signatures
+void printServerRoomStatus();
+void cleanOutDisconectedClient(struct MACClient *macClient);
+struct MACClient* findClientBySocket(int socket);
+int broadcastMessageToChatRoom(struct MACClient *clientFrom, char *msg);
+//the thread heandler function to handle client connections
+void *clientConnection_handler(void *);
 
 /*
 *   Adds a new ChatRoom to the list of ChatRooms maintained by the Server
@@ -117,11 +120,16 @@ int addClientToChatRoom(struct MACClient *chatClient, int chatRoomNumber) {
   int succesful = 0;
   if (chatRoomQty >= 0 && chatRoomQty <= MAX_CHATROOM_QTY) {
     if (chatRoomList[chatRoomNumber].clientsQty + 1 <  MAX_CHATROOM_CLIENTS) {
-      int clientIndex = chatRoomList[chatRoomNumber].clientsQty;
-      chatRoomList[chatRoomNumber].roomClients[clientIndex] = *chatClient;
-      chatRoomList[chatRoomNumber].roomClients[clientIndex].chatRoom = chatRoomNumber;
-      chatRoomList[chatRoomNumber].clientsQty++;
-      succesful = 1;
+      int i;
+      for(i = 0;i <= chatRoomList[chatRoomNumber].clientsQty;i++) {
+        if (chatRoomList[chatRoomNumber].roomClients[i].socket == 0) {
+        chatRoomList[chatRoomNumber].roomClients[i] = *chatClient;
+        chatRoomList[chatRoomNumber].roomClients[i].chatRoom = chatRoomNumber;
+        chatRoomList[chatRoomNumber].clientsQty++;
+        succesful = 1;
+        break;
+        }
+      }
     }
   }
   return succesful;
@@ -561,7 +569,6 @@ void *clientConnection_handler(void *socket_desc) {
     //Get the socket descriptor
     int sock = *(int*)socket_desc;
     int read_size;
-
     printf("#SERVER DEBUG# Thread for SOCKET = %d\n", sock);
     struct MACClient *fromClient = findClientBySocket(sock);
     printf("#SERVER DEBUG# MACClient name = %s\n", fromClient->name);
@@ -580,21 +587,12 @@ void *clientConnection_handler(void *socket_desc) {
         int i;
         //Send the message back to client
         // Broadcasts the message to all Clients registered and saved in socksClient list
-
         broadcastMessageToChatRoom(fromClient,client_message);
-        // for (i = 0; i < qtyClients; i++) {
-        //     printf("#SERVER BROADCAST# Message %s to socket => %i\n",client_message, sockClients[qtyClients - 1]);
-        //     if (sockClients[i] == sock) {
-        //       printf("#SERVER BROADCAST SKIP# Message skipped to socket => %i\n", sockClients[qtyClients - 1]);
-        //     } else {
-        //       write(sockClients[i],client_message, strlen(client_message));
-        //     }
-        // }
         bzero(client_message,1999);
     }
 
     if(read_size == 0) {
-        puts("Client disconnected");
+        printf("#SERVER DEBUG# MACClient username = %s disconnected!\n", fromClient->username);
         fflush(stdout);
     } else if(read_size == -1) {
         perror("recv failed");
@@ -603,6 +601,25 @@ void *clientConnection_handler(void *socket_desc) {
     free(socket_desc);
 
     return 0;
+}
+
+
+/*
+*  This method is responsible for Cleaning up the Client Disconnected
+*/
+void cleanOutDisconectedClient(struct MACClient *macClient) {
+  qtyClients--;
+  struct ChatRoom* userChatRoom = findChatRoomByNumber(macClient->chatRoom);
+  if (!macClient->isProfessor) {
+    userChatRoom->clientsQty--;
+    strcpy(macClient->name,"");
+    strcpy(macClient->username,"");
+    macClient->socket = 0;
+    macClient->chatRoom = 0;
+    macClient->isProfessor = 0;
+  } else {
+    // In this case it is a professor, should delete the room????
+  }
 }
 
 /*
