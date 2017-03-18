@@ -18,8 +18,13 @@ int static const MAX_USERNAME_SIZE = 50;
 int static const MAX_CHATROOM_CLIENTS = 50;
 int static const MAX_CHATROOM_QTY = 10;
 
+void printServerRoomStatus();
+struct MACClient* findClientBySocket(int socket);
+int broadcastMessageToChatRoom(struct MACClient *clientFrom, char *msg);
 //the thread heandler function to handle client connections
 void *clientConnection_handler(void *);
+
+
 int sockClients[200];
 int qtyClients = 0;
 int SOCKET_PORT = 0;
@@ -95,8 +100,6 @@ struct ChatRoom* findChatRoomByProfessorUser(char *profUser) {
   int i;
   for (i = 0; i < MAX_CHATROOM_QTY; i++) {
      if (strcmp(chatRoomList[i].professor.username,profUser) == 0) {
-      //  printf("UserName struct = %s\n",chatRoomList[i].professor.username);
-      //  printf("UserName passed = %s\n",profUser);
        room = &chatRoomList[i];
        break;
      }
@@ -116,6 +119,7 @@ int addClientToChatRoom(struct MACClient *chatClient, int chatRoomNumber) {
     if (chatRoomList[chatRoomNumber].clientsQty + 1 <  MAX_CHATROOM_CLIENTS) {
       int clientIndex = chatRoomList[chatRoomNumber].clientsQty;
       chatRoomList[chatRoomNumber].roomClients[clientIndex] = *chatClient;
+      chatRoomList[chatRoomNumber].roomClients[clientIndex].chatRoom = chatRoomNumber;
       chatRoomList[chatRoomNumber].clientsQty++;
       succesful = 1;
     }
@@ -132,10 +136,14 @@ struct ChatRoom* createChatRoomByProfessor(struct MACClient *chatProfessor, char
   int i;
   for (i = 0; i < MAX_CHATROOM_QTY; i++) {
      if (chatRoomList[i].clientsQty == 0) {
-       chatRoomList[i].professor = *chatProfessor;
-       chatRoomList[i].clientsQty = 1;
-       chatRoomList[i].number = i+1;
+       chatRoomList[i].number = i;
        strcpy(chatRoomList[i].name,roomName);
+       chatRoomList[i].professor = *chatProfessor;
+       chatRoomList[i].professor.chatRoom = i;
+       chatRoomList[i].roomClients[0] = *chatProfessor;
+       chatRoomList[i].roomClients[0].chatRoom = i;
+       chatRoomList[i].clientsQty = 1;
+       chatRoomQty++;
        room = &chatRoomList[i];
        break;
      }
@@ -147,18 +155,19 @@ struct ChatRoom* createChatRoomByProfessor(struct MACClient *chatProfessor, char
 *   Finds the Chat room by a Client User Name
 *   Returns a pointer reference to the ChatRoom
 */
-struct ChatRoom* findChatRoomByClientUser(char * clientUser) {
+struct ChatRoom* findChatRoomByClientUser(char * clientUsername) {
   struct ChatRoom *room = NULL;
   int i;
   for (i = 0; i < MAX_CHATROOM_QTY; i++) {
-    int u;
-    // printf("Chatroom name = %s\n",chatRoomList[i].name);
-    for (u = 0; u < chatRoomList[i].clientsQty; u++) {
-      // printf("User name %i = %s\n",u, chatRoomList[i].roomClients[u].name);
-      // printf("Searched User name = %s\n",clientUser);
-      if (strcmp(chatRoomList[i].roomClients[u].username,clientUser) == 0) {
-        room = &chatRoomList[i];
-        break;
+    if(strcmp(chatRoomList[i].professor.username,clientUsername) == 0) {
+      room = &chatRoomList[i];
+    } else {
+      int u;
+      for (u = 0; u < chatRoomList[i].clientsQty; u++) {
+        if (strcmp(chatRoomList[i].roomClients[u].username,clientUsername) == 0) {
+          room = &chatRoomList[i];
+          break;
+        }
       }
     }
     if (room != NULL) {
@@ -177,14 +186,41 @@ struct MACClient* findClientByUsername(char * clientUsername) {
   struct MACClient *macClient = NULL;
   int i;
   for (i = 0; i < MAX_CHATROOM_QTY; i++) {
-    int u;
-    // printf("Chatroom name = %s\n",chatRoomList[i].name);
-    for (u = 0; u < chatRoomList[i].clientsQty; u++) {
-      // printf("User name %i = %s\n",u, chatRoomList[i].roomClients[u].name);
-      // printf("Searched User name = %s\n",clientUser);
-      if (strcmp(chatRoomList[i].roomClients[u].username,clientUsername) == 0) {
-        macClient = &chatRoomList[i].roomClients[u];
-        break;
+    if(strcmp(chatRoomList[i].professor.username,clientUsername) == 0) {
+      macClient = &chatRoomList[i].professor;
+    } else {
+      int u;
+      for (u = 0; u < chatRoomList[i].clientsQty; u++) {
+        if (strcmp(chatRoomList[i].roomClients[u].username,clientUsername) == 0) {
+          macClient = &chatRoomList[i].roomClients[u];
+          break;
+        }
+      }
+    }
+    if (macClient != NULL) {
+      break;
+    }
+  }
+  return macClient;
+}
+
+/*
+*   Finds the User from its Chatroom based on his Socket
+*   Returns a pointer reference to the MACClient
+*/
+struct MACClient* findClientBySocket(int socket) {
+  struct MACClient *macClient = NULL;
+  int i;
+  for (i = 0; i < MAX_CHATROOM_QTY; i++) {
+    if(chatRoomList[i].professor.socket == socket) {
+      macClient = &chatRoomList[i].professor;
+    } else {
+      int u;
+      for (u = 0; u < chatRoomList[i].clientsQty; u++) {
+        if (chatRoomList[i].roomClients[u].socket == socket) {
+          macClient = &chatRoomList[i].roomClients[u];
+          break;
+        }
       }
     }
     if (macClient != NULL) {
@@ -374,7 +410,6 @@ int serverChatRoomTest() {
   }
 }
 
-
 /*
 *
 *   Main method to start the server
@@ -428,16 +463,87 @@ int chatServerStart(int argc , char *argv[]) {
         sockClients[qtyClients - 1] = client_sock;
         printf("#SERVER DEBUG# Total of Clients Connected: %i\n", qtyClients);
         printf("#SERVER DEBUG# New Socket saved: %i\n", sockClients[qtyClients - 1]);
+        printf("#SERVER DEBUG# Socket descriptor: %d\n", client_sock);
 
         if( pthread_create( &sniffer_thread,NULL,clientConnection_handler, (void*) new_sock) < 0) {
             printf("#SERVER DEBUG# ERROR, failed to dispatch a new Thread for a client connection\n");
         } else {
             printf("#SERVER DEBUG# Thread dispatched to handle the socket client connection\n");
+            // Code for testing purposes only!!!!
+            // needs to be removed after integrated
+            switch (qtyClients) {
+              case 1 :
+              {
+                struct MACClient professor1 = {"Kobti Ziad","kobti",client_sock,0,1};
+                struct ChatRoom *chatRoom1 = createChatRoomByProfessor(&professor1, "Advanced System Programming");
+                if (chatRoom1 != NULL) {
+                  printf("#SERVER DEBUG# User 1 added as professor and created room %d and socket %d\n",chatRoom1->number, professor1.socket);
+                } else {
+                  printf("#SERVER DEBUG# User 1 ERROR!\n");
+                }
+                break;
+              }
+              case 2:
+              {
+                struct MACClient client1 = {"Clovis Nogueira","machadoc",client_sock,0,0};
+                struct ChatRoom *chatRoomS1 = findChatRoomByProfessorUser("kobti");
+                if(addClientToChatRoom(&client1,chatRoomS1->number)) {
+                  printf("#SERVER DEBUG# User 2 added as client to room %d and socket %d\n",chatRoomS1->number, client1.socket);
+                } else {
+                  printf("#SERVER DEBUG# User 2 ERROR\n");
+                }
+                break;
+              }
+              case 3:
+              {
+                struct MACClient client1 = {"Yadwinder Singh","yad",client_sock,0,0};
+                struct ChatRoom *chatRoomS1 = findChatRoomByProfessorUser("kobti");
+                if(addClientToChatRoom(&client1,chatRoomS1->number)) {
+                  printf("#SERVER DEBUG# User 3 added as client to room %d and socket %d\n",chatRoomS1->number, client1.socket);
+                } else {
+                  printf("#SERVER DEBUG# User 3 ERROR\n");
+                }
+                break;
+              }
+              case 4 :
+              {
+                struct MACClient professor1 = {"Stephanos Something","stephanos",client_sock,0,1};
+                struct ChatRoom *chatRoom1 = createChatRoomByProfessor(&professor1, "Advanced Database Systems");
+                if (chatRoom1 != NULL) {
+                  printf("#SERVER DEBUG# User 4 added as professor and created room %d and socket %d\n",chatRoom1->number, professor1.socket);
+                } else {
+                  printf("#SERVER DEBUG# User 4 ERROR!\n");
+                }
+                break;
+              }
+              case 5:
+              {
+                struct MACClient client1 = {"Edne Nogueira","ednecris",client_sock,0,1};
+                struct ChatRoom *chatRoomS1 = findChatRoomByProfessorUser("stephanos");
+                if(addClientToChatRoom(&client1,chatRoomS1->number)) {
+                  printf("#SERVER DEBUG# User 5 added as client to room %d and socket %d\n",chatRoomS1->number, client1.socket);
+                } else {
+                  printf("#SERVER DEBUG# User 5 ERROR\n");
+                }
+                break;
+              }
+              case 6:
+              {
+                struct MACClient client1 = {"Precious Akporah","precious",client_sock,0,1};
+                struct ChatRoom *chatRoomS1 = findChatRoomByProfessorUser("stephanos");
+                if(addClientToChatRoom(&client1,chatRoomS1->number)) {
+                  printf("#SERVER DEBUG# User 6 added as client to room %d and socket %d\n",chatRoomS1->number, client1.socket);
+                } else {
+                  printf("#SERVER DEBUG# User 6 ERROR\n");
+                }
+                break;
+              }
+            }
         }
-
         //Now join the thread, so that we dont terminate before the thread
         // Commented, weird behavior when using this method.
         //pthread_join(sniffer_thread , NULL);
+        printServerRoomStatus();
     }
     if (client_sock < 0) {
         printf("#SERVER DEBUG# ERROR, ACCEPTING the connection to a client failed!\n");
@@ -455,29 +561,36 @@ void *clientConnection_handler(void *socket_desc) {
     //Get the socket descriptor
     int sock = *(int*)socket_desc;
     int read_size;
-    char *message;
 
+    printf("#SERVER DEBUG# Thread for SOCKET = %d\n", sock);
+    struct MACClient *fromClient = findClientBySocket(sock);
+    printf("#SERVER DEBUG# MACClient name = %s\n", fromClient->name);
+    printf("#SERVER DEBUG# MACClient username = %s\n", fromClient->username);
+    printf("#SERVER DEBUG# MACClient Socket = %d\n", fromClient->socket);
+
+    char client_message[2000] = "Greetings ";
+    strcat(client_message,fromClient->name);
+    strcat(client_message,"! I am your Chat server, you are connected.");
     //Send some messages to the client
-    message = "Greetings! I am your Chat server, you are connected!\n";
-    write(sock , message , strlen(message));
-    printf("#SERVER REPLY# %s\n", message);
-    // Limits to read client message to 255 Char
-    char client_message[256];
-    bzero(client_message,256);
+    write(sock ,client_message, strlen(client_message));
+    bzero(client_message,2000);
+
     //Receive a message from client
-    while((read_size = read(sock,client_message, 255)) > 0) {
+    while((read_size = read(sock,client_message, 1999)) > 0) {
         int i;
         //Send the message back to client
         // Broadcasts the message to all Clients registered and saved in socksClient list
-        for (i = 0; i < qtyClients; i++) {
-            printf("#SERVER BROADCAST# Message %s to socket => %i\n",client_message, sockClients[qtyClients - 1]);
-            if (sockClients[i] == sock) {
-              printf("#SERVER BROADCAST SKIP# Message skipped to socket => %i\n", sockClients[qtyClients - 1]);
-            } else {
-              write(sockClients[i],client_message, strlen(client_message));
-            }
-        }
-        bzero(client_message,256);
+
+        broadcastMessageToChatRoom(fromClient,client_message);
+        // for (i = 0; i < qtyClients; i++) {
+        //     printf("#SERVER BROADCAST# Message %s to socket => %i\n",client_message, sockClients[qtyClients - 1]);
+        //     if (sockClients[i] == sock) {
+        //       printf("#SERVER BROADCAST SKIP# Message skipped to socket => %i\n", sockClients[qtyClients - 1]);
+        //     } else {
+        //       write(sockClients[i],client_message, strlen(client_message));
+        //     }
+        // }
+        bzero(client_message,1999);
     }
 
     if(read_size == 0) {
@@ -486,22 +599,81 @@ void *clientConnection_handler(void *socket_desc) {
     } else if(read_size == -1) {
         perror("recv failed");
     }
-
     //Free the socket pointer
     free(socket_desc);
 
     return 0;
 }
 
+/*
+*  This method is responsible for broadcasting messages to all the Chat Room clients
+*/
+int broadcastMessageToChatRoom(struct MACClient *clientFrom, char *msg) {
+  printf("#SERVER BROADCAST# Message Broadcast method\n");
+  printf("#SERVER BROADCAST# Message From: %s\n", clientFrom->name);
+  struct ChatRoom* userChatRoom = findChatRoomByNumber(clientFrom->chatRoom);
 
+  if (userChatRoom != NULL) {
+    printf("#SERVER BROADCAST# Room name : %s\n", userChatRoom->name);
+  } else {
+    printf("#SERVER BROADCAST# ChatRoom NOT FOUND!\n");
+  }
+
+  int userIndex;
+  for (userIndex = 0; userIndex < userChatRoom->clientsQty; userIndex++) {
+    int socket = userChatRoom->roomClients[userIndex].socket;
+    printf("#SERVER BROADCAST# Broadcasted Message to Username: %s\n",userChatRoom->roomClients[userIndex].username);
+    if (socket != clientFrom->socket) {
+      char finalMsg[2000] = "# From: ";
+      strcat(finalMsg, clientFrom->name);
+      strcat(finalMsg, "\nMessage: ");
+      strcat(finalMsg, msg);
+      strcat(finalMsg, "\n");
+      // Write message here
+      write(socket,finalMsg, strlen(finalMsg));
+    }
+  }
+}
+
+/*
+*  This method is can be used to DEBUG Purposes and it prints the actual status
+*  of the Chat Room Structure
+*/
+void printServerRoomStatus() {
+  int chatIndex, clientIndex;
+  printf("######################################################################\n");
+  printf("#SERVER DEBUG# Room total: %d\n",chatRoomQty);
+  for(chatIndex = 0; chatIndex < chatRoomQty; chatIndex++) {
+    printf("######################################################################\n");
+    printf("#SERVER DEBUG# Room Index: %d\n",chatRoomList[chatIndex].number);
+    printf("#SERVER DEBUG# Room Name: %s\n",chatRoomList[chatIndex].name);
+    printf("#SERVER DEBUG# Room Qty Clients: %d\n",chatRoomList[chatIndex].clientsQty);
+    printf("#SERVER DEBUG# Room Professor Name: %s\n",chatRoomList[chatIndex].professor.name);
+    printf("#SERVER DEBUG# Room Professor User Name: %s\n",chatRoomList[chatIndex].professor.username);
+    printf("#SERVER DEBUG# Room Professor Socket: %d\n",chatRoomList[chatIndex].professor.socket);
+    printf("#SERVER DEBUG# Room Is professor Client: %d\n",chatRoomList[chatIndex].professor.isProfessor);
+    printf("#SERVER DEBUG# Room Professor Room: %d\n",chatRoomList[chatIndex].professor.chatRoom);
+    for (clientIndex = 0;clientIndex < chatRoomList[chatIndex].clientsQty; clientIndex++) {
+      printf("\t#SERVER DEBUG# Room Client Name: %s\n",chatRoomList[chatIndex].roomClients[clientIndex].name);
+      printf("\t#SERVER DEBUG# Room Client User Name: %s\n",chatRoomList[chatIndex].roomClients[clientIndex].username);
+      printf("\t#SERVER DEBUG# Room Client Socket: %d\n",chatRoomList[chatIndex].roomClients[clientIndex].socket);
+      printf("\t#SERVER DEBUG# Room Is professor Client: %d\n",chatRoomList[chatIndex].roomClients[clientIndex].isProfessor);
+      printf("\t#SERVER DEBUG# Room Client Room: %d\n",chatRoomList[chatIndex].roomClients[clientIndex].chatRoom);
+    }
+    printf("#######################################################################\n");
+  }
+
+}
+
+/*
+*  This main method to start the server
+*/
 int main(int argc , char *argv[]) {
-
   if (argc != 2) {
     printf("Provide the SOCKET PORT to start the server\n");
     printf("Example: ChatServer 8888\n");
     exit(0);
   }
-
   // Start the Server here
-  //chatServerStart(argc, argv);
+  chatServerStart(argc, argv);
 }
