@@ -18,7 +18,7 @@
 #include <time.h>
 
 // This constant defines the maximum of clients to be connected to this Server
-int static const MAX_CLIENTS = 200;
+int static const MAX_CLIENTS = 1000;
 int static const MAX_NAME_SIZE = 50;
 int static const MAX_USERNAME_SIZE = 50;
 int static const MAX_CHATROOM_CLIENTS = 50;
